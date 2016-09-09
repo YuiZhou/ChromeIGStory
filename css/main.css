@@ -1,5 +1,6 @@
 .unseenStoryItem {
   background: -webkit-linear-gradient(left top, #a31391 0%, #f8a74f 100%);
+  margin-bottom: 3px;
 }
 
 .seenStoryItem {
@@ -14,6 +15,28 @@
   margin-right: 5px;
   padding: 3px;
   cursor: pointer;
+}
+
+.instagramUserImage {
+  border-radius: 50%;
+  padding: 5px;
+  cursor: pointer;
+}
+
+.storyAuthorImage {
+  width: 32px;
+  height: 32px;
+  left: 10px;
+  top: 15px;
+  border-radius: 50%;
+  z-index: 1;
+}
+
+.storyAuthorUsername {
+  left: 55px;
+  top: 25px;
+  color: white;
+  z-index: 1;
 }
 
 .videoStoryItem {
@@ -32,7 +55,7 @@
   display: block;
   text-align: center;
   margin-bottom: 20px;
-  max-height: 110px;
+  max-height: 130px;
   overflow-x: auto;
   overflow-y: hidden;
   white-space: nowrap;

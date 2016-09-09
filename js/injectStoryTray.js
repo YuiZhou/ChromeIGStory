@@ -1,5 +1,6 @@
 var API_BASE = "https://i.instagram.com/api/v1/feed/";
 var INSTAGRAM_FEED_CLASS_NAME = "_qj7yb";
+var INSTAGRAM_USER_IMAGE_CLASS_NAME = "_8gpiy _r43r5";
 
 // BEGIN INJECTION
 injectPswpContainer();
@@ -8,10 +9,22 @@ loadStories();
 // listen for background.js to send over cookies so we are clear to make requests
 chrome.runtime.onMessage.addListener(
   function(request, sender, sendResponse) {
-    var instagramCookies = JSON.parse(request);    
+    var instagramCookies = JSON.parse(request.instagramCookies);    
     // only fetch stories if the cookies are available
     if((instagramCookies.ds_user_id && instagramCookies.sessionid)) {
-      getStories();
+      var instagramFeed = document.getElementsByClassName(INSTAGRAM_FEED_CLASS_NAME)[0];
+      var instagramUserImage = document.getElementsByClassName(INSTAGRAM_USER_IMAGE_CLASS_NAME)[0];
+      if(instagramFeed) {
+        // only fetch and inject stories if the stories haven't already been injected
+        if(!document.getElementById("trayContainer")) {
+          getStories(instagramFeed);
+        }
+      }
+      if(instagramUserImage) {
+        if(!$(instagramUserImage).hasClass("instagramUserImage")) {
+          getUserStory(instagramUserImage);
+        }
+      }
     } 
   });
 
@@ -20,15 +33,63 @@ function loadStories() {
   chrome.runtime.sendMessage('loadStories');
 }
 
+// fetch user's Story and inject it into their profile page if it's available
+function getUserStory(instagramUserImage) {
+  // sharedData is a window variable from Instagram that contains information about the current page
+  var sharedData = JSON.parse($('html')[0].outerHTML.split("window._sharedData = ")[1].split(";</script>")[0]);
+  var entryData = sharedData['entry_data'];
+  var userId;
+  
+  /*
+  * sharedData contains 'ProfilePage' if a user's profile page was loaded by its URL
+  * if you click on a profile from the main Instagram feed or from search, an AJAX request will load the profile
+  * and sharedData will still contain 'FeedPage', not 'ProfilePage'. 
+  */
+  if(entryData['ProfilePage']) {
+    userId = entryData['ProfilePage'][0]['user']['id'];
+  } else if(entryData['FeedPage']) {
+    userId = entryData['FeedPage'][0]['feed']['media']['nodes'][0]['owner']['id'];
+    // refresh the page so we get ProfilePage from sharedData; FeedPage sharedData doesn't have the user's ID 
+    // TODO: figure out way to get user's ID when loading user profile from AJAX 
+    chrome.runtime.sendMessage('refreshPage');
+  }
+  
+  return getStory(userId).then(function(story) {
+    if(story.items.length > 0) {
+      $(instagramUserImage).addClass('unseenStoryItem');
+      $(instagramUserImage).addClass('instagramUserImage');
+      
+      instagramUserImage.addEventListener("click", function() {
+        showImageGallery(story.items);
+      });
+      
+      // right click context menu for downloading Story
+      $(function() {
+        $.contextMenu({
+          selector: '.instagramUserImage', 
+          callback: function(key, options) {
+            downloadStory(story);
+          },
+          items: {
+            "download": {name: "Download Story"}
+          }
+        });
+      });
+    }
+  }, function(error) {
+    console.log("Error loading Story for user: " + JSON.stringify(error));
+  });
+}
+
 // ping Instagram API for new Stories in tray
-function getStories() {
+function getStories(instagramFeed) {
   var xhr = new XMLHttpRequest();
   xhr.open("GET", API_BASE + "reels_tray/", true);
   xhr.withCredentials = true;
   xhr.onreadystatechange = function() {
     if (xhr.readyState == 4) {
       if(xhr.status == 200) {
-        injectStoryTray(JSON.parse(xhr.responseText));
+        injectStoryTray(JSON.parse(xhr.responseText), instagramFeed);
       }
     }
   }
@@ -62,7 +123,7 @@ function injectPswpContainer() {
 }
 
 // inject Instagram Stories tray above the main Instagram feed
-function injectStoryTray(response) {
+function injectStoryTray(response, instagramFeed) {
   var trayContainer = document.createElement("div");
   trayContainer.setAttribute("id", "trayContainer");
   
@@ -78,10 +139,17 @@ function injectStoryTray(response) {
       var user = trayItem['user'];
       var picture = user['profile_pic_url'];
       
+      var trayItemContainer = document.createElement('div');
+      trayItemContainer.style.display = 'inline-flex';
+      trayItemContainer.style.marginLeft = '5px';
+      trayItemContainer.style.marginRight = '5px';
+      trayItemContainer.style.marginBottom = '15px';
+      
       var trayItemImage = document.createElement('img');
       trayItemImage.setAttribute("id", "trayItemImage" + i);
       trayItemImage.width = 64;
       trayItemImage.height = 64;
+      trayItemImage.style.margin = 'auto';
       trayItemImage.setAttribute("class", ((trayItem.items) ? "unseenStoryItem" : "seenStoryItem") + " trayItemImage");
       trayItemImage.src = picture.replace("http://", "https://");
       trayItemImage.title = user.username;
@@ -100,6 +168,20 @@ function injectStoryTray(response) {
           });
         }
       });
+      
+      var trayItemUsername = document.createElement('span');
+      trayItemUsername.textContent = user.username;
+      trayItemUsername.style.marginTop = '10px';
+      trayItemUsername.style.fontSize = '14px';
+
+      if(trayItem.items) {
+        trayItemUsername.style.color = '#262626';
+      } else {
+        trayItemUsername.style.color = '#a0a0a0';
+      }
+      
+      trayItemContainer.appendChild(trayItemImage);
+      trayItemContainer.appendChild(trayItemUsername);
       
       // right click context menu for downloading Story
       (function(i) {
@@ -128,15 +210,14 @@ function injectStoryTray(response) {
         });
       })(i);
       
-      trayContainer.appendChild(trayItemImage);
+      trayContainer.appendChild(trayItemContainer);
       
     })(trayItem);
     
   }
   
   // inject Story tray above Instagram feed
-  var instagramFeed = document.getElementsByClassName(INSTAGRAM_FEED_CLASS_NAME)[0];
-  if(instagramFeed) {
+  if(!document.getElementById("trayContainer")) {
     instagramFeed.insertBefore(trayContainer, instagramFeed.childNodes[0]);
   }
 }
@@ -227,7 +308,8 @@ function showImageGallery(storyItems) {
         $(storyVideo).css('position', 'absolute');
         
         slides.push({
-          html: storyVideo
+          html: storyVideo,
+          storyItem: storyItem
         });
       } else {
         // create a normal slide with the Story image
@@ -238,7 +320,7 @@ function showImageGallery(storyItems) {
           msrc: url,
           w: image['width'],
           h: image['height'],
-          title: storyItem['user']['username'] + " - " + moment.unix(storyItem['taken_at']).fromNow()
+          storyItem: storyItem
         });
       }
     });
@@ -249,7 +331,38 @@ function showImageGallery(storyItems) {
     };
     
     var gallery = new PhotoSwipe(pswpElement, PhotoSwipeUI_Default, slides, options);
-    gallery.init();
+    
+    // update the Story author's username and profile picture
+    gallery.listen('afterChange', function() {
+      
+      var currItem = $(gallery.currItem.container);
+      
+      var storyAuthorImage = currItem.find('.storyAuthorImage');
+      var storyAuthorUsername = currItem.find('.storyAuthorUsername');
+      
+      // only add the Story author's username/profile picture to the current slide if it doesn't already exist
+      if(storyAuthorImage.length == 0 && storyAuthorUsername.length == 0) {
+        storyAuthorImage = document.createElement('img');
+        storyAuthorImage.setAttribute("class", "storyAuthorImage");
+        storyAuthorImage.style.position = 'absolute';
+        
+        storyAuthorUsername = document.createElement('span');
+        storyAuthorUsername.setAttribute("class", "storyAuthorUsername");
+        storyAuthorUsername.style.position = 'absolute';
+        
+        $(currItem).append(storyAuthorImage);
+        $(currItem).append(storyAuthorUsername);
+      }
+
+      $(storyAuthorImage).attr("src", gallery.currItem.storyItem['user']['profile_pic_url']);
+      $(storyAuthorUsername).text(gallery.currItem.storyItem['user']['username'] + " - " + moment.unix(gallery.currItem.storyItem['taken_at']).fromNow());
+      
+      if(gallery.currItem.storyItem['video_versions']) {
+        $(storyAuthorImage).css("top", "45px");
+        $(storyAuthorUsername).css("top", "55px");
+      }
+      
+    });
     
     // handle playing/pausing videos while traversing the gallery
     gallery.listen('beforeChange', function() {
@@ -275,6 +388,8 @@ function showImageGallery(storyItems) {
         $(this)[0].pause();
       });
     });
+    
+    gallery.init();
     
   });
   
